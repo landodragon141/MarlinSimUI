@@ -86,9 +86,41 @@ Command-line options:
 | --- | --- |
 | `--agent-port <n>` | Enable the agent interface on `127.0.0.1:<n>` (or `MARLIN_SIM_AGENT_PORT`). |
 | `--serial-port <n>` | TCP port for the raw G-code socket (default 8099, or `MARLIN_SIM_SERIAL_PORT`). |
+| `--ws-port <n>` | Serve the same G-code stream over a WebSocket on `ws://127.0.0.1:<n>/` (or `MARLIN_SIM_WS_PORT`). Off by default. |
+| `--ws-allow-origin <origin>` | Also let pages from `<origin>` use the WebSocket (pages on localhost always can). Repeatable; `*` allows any page. |
 | `--no-audio` | Disable buzzer emulation. |
 | `--machine <type>` | Viewport printer model: `bedslinger`, `cube`, `delta`, `scara`, `belt` or `toolchanger`. |
 | `--belt-angle <deg>` | Belt printer gantry tilt from the belt, 1 to 89 degrees (default 45). |
+
+### WebSocket serial bridge
+
+Web apps can't open the raw TCP socket, so `--ws-port` serves serial stream 3
+over a WebSocket too. A page talks to the simulator the way it would talk to a
+printer over Web Serial: bytes in, bytes out, with no meaning attached to
+message boundaries. Marlin's output arrives as binary messages.
+
+```bash
+MarlinSimulator --ws-port 8100 &
+```
+
+```js
+const ws = new WebSocket("ws://127.0.0.1:8100/");
+ws.binaryType = "arraybuffer";
+ws.onmessage = (e) => console.log(new TextDecoder().decode(e.data));  // "ok", "echo:...", ...
+ws.onopen = () => ws.send("M115\n");
+```
+
+- Like the raw socket, Marlin only reads stream 3 with `#define SERIAL_PORT_2 3`
+  in `Configuration.h`.
+- Listens on 127.0.0.1 only. Because any web page could try to connect to a
+  local port, the Origin header is checked: pages served from `localhost`,
+  `127.0.0.1` or `[::1]` are allowed, others need `--ws-allow-origin`. Clients
+  that send no Origin (scripts, `websocat`) are allowed.
+- One client at a time; a second connection is refused with 409 instead of
+  taking over the first one's session. Output produced while nobody is
+  connected is discarded, so each session starts on a clean stream.
+- Host-only tests (no Marlin build needed): `make -C test/websocket test`
+  (needs `pip install websockets`).
 
 ### 3D printer models in the Viewport
 

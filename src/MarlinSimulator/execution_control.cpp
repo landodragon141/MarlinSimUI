@@ -6,6 +6,7 @@
 #include "execution_control.h"
 #include "serial.h"
 #include "RawSocketSerial.h"
+#include "websocket/websocket_serial.h"
 #include "agent/agent_interface.h"
 #include "agent/serial_log.h"
 #include "agent/host_print.h"
@@ -98,6 +99,7 @@ bool Kernel::execute_loop(uint64_t max_end_ticks) {
         std::scoped_lock buffer_lock(net_serial.buffer_mutex);
         net_serial.tx_buffer.write(serial_tx, count);
       }
+      ws_serial.write(serial_tx, count);  // WebSocket bridge gets the same stream
     }
     serial_stream_3.rx_write_from(terminal_3->serial_buffer.out);
   }
@@ -109,6 +111,12 @@ bool Kernel::execute_loop(uint64_t max_end_ticks) {
     std::scoped_lock buffer_lock(net_serial.buffer_mutex);
     auto count = net_serial.readBytes(buffer, std::size(buffer));
     serial_stream_3.rx_write((uint8_t *)buffer, count);
+  }
+
+  if (ws_serial.available()) {
+    static uint8_t ws_buffer[1024];
+    auto count = ws_serial.read(ws_buffer, std::size(ws_buffer));
+    serial_stream_3.rx_write(ws_buffer, count);
   }
 
   // Service queued agent requests on the simulation thread. execute_loop is

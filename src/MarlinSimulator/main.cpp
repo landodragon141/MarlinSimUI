@@ -9,6 +9,7 @@
 #include "src/inc/MarlinConfig.h"
 
 #include "RawSocketSerial.h"
+#include "websocket/websocket_serial.h"
 #include "audio.h"
 #include "agent/agent_interface.h"
 #include "agent/serial_log.h"
@@ -69,6 +70,8 @@ struct CommandLineOptions {
   uint16_t serial_port = 8099;  // historical default for the raw G-code socket
   uint16_t agent_port  = 0;     // 0 = agent interface disabled
   uint16_t webcam_port = 0;     // 0 = webcam off at start (the Viewport menu can turn it on)
+  uint16_t ws_port     = 0;     // 0 = WebSocket serial bridge disabled
+  std::vector<std::string> ws_allowed_origins;  // added to the always-allowed localhost pages
   bool audio_enabled   = true;
 };
 
@@ -80,6 +83,10 @@ static void print_usage(const char* argv0) {
   printf("                      (also settable via MARLIN_SIM_AGENT_PORT)\n");
   printf("  --webcam-port <n>   Serve the Viewport as a webcam on port <n> (snapshot and MJPEG stream)\n");
   printf("                      (also settable via MARLIN_SIM_WEBCAM_PORT). Off by default; the Viewport menu uses the serial port + 2\n");
+  printf("  --ws-port <n>       Serve serial stream 3 over a WebSocket on ws://127.0.0.1:<n>/ for web apps\n");
+  printf("                      (also settable via MARLIN_SIM_WS_PORT). Needs SERIAL_PORT_2 3, like --serial-port\n");
+  printf("  --ws-allow-origin <origin>  Let pages from <origin> (e.g. https://example.github.io) use the WebSocket.\n");
+  printf("                      Pages on localhost are always allowed. Repeatable; '*' allows any page\n");
   printf("  --no-audio          Disable audio/buzzer emulation\n");
   printf("  --machine <type>    Printer model in the Viewport: bedslinger, cube, delta, scara, belt, toolchanger\n");
   printf("                      (default: from the Marlin configuration; DELTA, SCARA and BELTPRINTER builds allow only their own)\n");
@@ -102,6 +109,7 @@ static bool parse_command_line(int argc, char** argv, CommandLineOptions& option
   env_port("MARLIN_SIM_SERIAL_PORT", options.serial_port);
   env_port("MARLIN_SIM_AGENT_PORT", options.agent_port);
   env_port("MARLIN_SIM_WEBCAM_PORT", options.webcam_port);
+  env_port("MARLIN_SIM_WS_PORT", options.ws_port);
 
   for (int i = 1; i < argc; ++i) {
     const char* arg = argv[i];
@@ -128,6 +136,16 @@ static bool parse_command_line(int argc, char** argv, CommandLineOptions& option
     }
     else if (strcmp(arg, "--webcam-port") == 0) {
       if (!next_port(options.webcam_port)) return false;
+    }
+    else if (strcmp(arg, "--ws-port") == 0) {
+      if (!next_port(options.ws_port)) return false;
+    }
+    else if (strcmp(arg, "--ws-allow-origin") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "--ws-allow-origin requires an origin, e.g. https://example.github.io or *\n");
+        return false;
+      }
+      options.ws_allowed_origins.push_back(argv[++i]);
     }
     else if (strcmp(arg, "--no-audio") == 0) {
       options.audio_enabled = false;
@@ -185,6 +203,7 @@ int main(int argc, char** argv) {
   // Listen before starting simulator loop to avoid
   // thread synchronization issues if listen_on_port fails
   net_serial.listen_on_port(options.serial_port);
+  if (options.ws_port) ws_serial.start(options.ws_port, options.ws_allowed_origins);  // non-fatal on failure
 
   // Watch Marlin's output for thermal faults, to blink the offending heater.
   // Set before the simulation starts, whether or not the agent interface is on.
@@ -212,6 +231,7 @@ int main(int argc, char** argv) {
   simulation_loop.join();
   agent::server.stop();
   webcam::shutdown();
+  ws_serial.stop();
   net_serial.stop();
 
   SDLNet_Quit();
